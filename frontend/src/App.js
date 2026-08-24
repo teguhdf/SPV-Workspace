@@ -6,6 +6,8 @@ import LoginPage from "@/pages/LoginPage";
 import RegisterPage from "@/pages/RegisterPage";
 import SpvDashboard from "@/pages/SpvDashboard";
 import WorkspacePage from "@/pages/WorkspacePage";
+import StrategyPage from "@/pages/StrategyPage";
+import UserManagementPage from "@/pages/UserManagementPage";
 import AuthCallback from "@/pages/AuthCallback";
 import AppLayout from "@/components/AppLayout";
 
@@ -53,6 +55,16 @@ function AppRouter() {
           <AppLayout><WorkspacePage /></AppLayout>
         </ProtectedRoute>
       } />
+      <Route path="/strategy" element={
+        <ProtectedRoute spvOnly>
+          <AppLayout><StrategyPageWrapper /></AppLayout>
+        </ProtectedRoute>
+      } />
+      <Route path="/users" element={
+        <ProtectedRoute spvOnly>
+          <AppLayout><UserManagementPage /></AppLayout>
+        </ProtectedRoute>
+      } />
     </Routes>
   );
 }
@@ -72,4 +84,9 @@ function MyWorkspaceRedirect() {
   const { myWorkspace, loading } = useAuth();
   if (loading || !myWorkspace) return <div className="text-emerald-800">Memuat workspace...</div>;
   return <Navigate to={`/workspaces/${myWorkspace.id}`} replace />;
+}
+
+function StrategyPageWrapper() {
+  const { user } = useAuth();
+  return <StrategyPage isSpv={user?.role === "spv" || user?.role === "admin"} />;
 }

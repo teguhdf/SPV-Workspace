@@ -1,6 +1,6 @@
 import { NavLink, useNavigate } from "react-router-dom";
 import { useAuth } from "@/lib/auth";
-import { LayoutDashboard, Briefcase, LogOut, Moon } from "lucide-react";
+import { LayoutDashboard, Briefcase, LogOut, Moon, Target, Users2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 export default function AppLayout({ children }) {
@@ -43,6 +43,18 @@ export default function AppLayout({ children }) {
               <Briefcase className="w-4 h-4" />
               <span>{isSpv ? "Workspace Saya" : "Workspace"}</span>
             </NavLink>
+          )}
+          {isSpv && (
+            <>
+              <NavLink to="/strategy" className={linkCls} data-testid="nav-strategy">
+                <Target className="w-4 h-4" />
+                <span>Strategi Eksekusi</span>
+              </NavLink>
+              <NavLink to="/users" className={linkCls} data-testid="nav-users">
+                <Users2 className="w-4 h-4" />
+                <span>Manajemen User</span>
+              </NavLink>
+            </>
           )}
         </nav>
         <div className="p-4 border-t border-white/10 space-y-3">

@@ -1,0 +1,51 @@
+{
+  "summary": "Full backend + frontend test of the new SPV-only features (Strategi Eksekusi: Landasan Strategis / Balanced Scorecard / Cascade View, and Manajemen User CRUD) plus regression spot-checks. Created /app/backend/tests/backend_test.py (37 pytest cases): 36 passed, 1 failed (organization partial-update wipes lists). Frontend Playwright: SPV login, sidebar gating, /strategy 3 tabs, Landasan save+reload persistence, BSC goal create with 2 KPIs (progress bars 80%/40% with correct colors), goal edit + delete, Cascade View rendering (org name, vision, values badges, all 4 perspectives, counters), User Management list/create/search/edit/reset-password/delete, self-row has no Delete, new user can log in with reset password, anggota is blocked from /strategy and /users (sidebar hidden + redirect). Regression: OKR create, task create in Execution Scoreboard, Amaliyah habit toggle (with persistence after reload), SPV dashboard all OK. All QA-created data cleaned up; global organization doc restored to the owner's real content.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "PUT /api/organization", "issue": "Partial payload wipes list fields. OrgIn declares mission/values with default [] (not None), so the `if v is not None` filter keeps the empty lists and $set clears them. PUT {\"name\":\"X\"} erases mission and values. Fix: make them Optional[List[str]] = None. (test_partial_update_does_not_wipe_lists)"},
+      {"endpoint": "GET /api/strategy/cascade & FE healthPill", "issue": "Spec in review request says baseline=0/target=100/realisasi=40 -> 'At Risk' amber, but implemented thresholds are >=80 green, >=50 amber, else red, so 40% renders 'Off Track' red (verified in UI: bg-rose-500 bar + Off Track pill). Backend health for 40% is also 'red'. Align thresholds or the spec."},
+      {"endpoint": "GET /api/dashboard/spv", "issue": "N+1 query pattern: per-workspace owner/tasks/okrs/habits/habit_logs queries inside a loop. Works now, will degrade with more workspaces."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "StrategyPage - BSC goal dialog", "issue": "Missing data-testid on KPI numeric inputs (Baseline/Target/Realisasi/Unit), the 'KPI' add button and the goal edit/delete icon buttons. Tests must fall back to placeholder text and button index, which is brittle.", "selector": "input[placeholder='Target'], goal card button nth(0)/nth(1)", "priority": "LOW"},
+      {"component": "UserManagementPage - create/edit dialogs", "issue": "Divisi input has no data-testid (had to use dialog input .last).", "selector": "[role='dialog'] input", "priority": "LOW"},
+      {"component": "StrategyPage - LandasanPanel/load()", "issue": "load()/loadCascade() have no try/catch; a failing GET /organization or /strategy/goals leaves the page stuck on 'Memuat...' with an unhandled promise rejection and no error UI.", "selector": "[data-testid='strategy-page']", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Strategy / Balanced Scorecard", "issues": ["Layout, contrast and spacing look good; progress bars and health pills render correctly. No issues found."]},
+      {"screen": "Manajemen User", "issues": ["Row action icon buttons (edit/key/trash) have no tooltips/aria-labels - icon-only actions are ambiguous for users and screen readers."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Fix PUT /api/organization: change OrgIn.mission/values to Optional[List[str]] = None so partial updates don't wipe saved mission/values.",
+    "Decide + align progress health thresholds (40% currently = Off Track red, spec expected At Risk amber) in both server.py _kpi_progress health mapping and StrategyPage healthPill/healthColor.",
+    "Remove dead/duplicated code in POST /api/strategy/goals (line ~824 builds `kpis` with an unreadable double comprehension and is immediately overwritten on the next line).",
+    "Extract the duplicated progress formula (_kr_progress / _kpi_progress in server.py, kpiProgress in StrategyPage.jsx) into one shared helper each side.",
+    "Split /app/backend/server.py (986 lines) into routers (auth, workspaces, okr/tasks/habits, strategy, admin) - exceeds the 700-line guideline.",
+    "Add try/catch + error state to StrategyPage load()/loadCascade().",
+    "Add missing data-testid attributes: goal KPI numeric inputs, add-KPI button, goal-edit-{id}/goal-delete-{id}, and division inputs in the user dialogs."
+  ],
+  "critical_code_review_comments": [
+    "OrgIn list defaults of [] make PUT /organization destructive for partial payloads - only the frontend's always-full payload hides this.",
+    "server.py is 986 lines and mixes auth, workspace, strategy and admin concerns; strategy/admin models are declared after the startup handler, hurting readability.",
+    "POST /api/strategy/goals contains dead code: doc['kpis'] is computed twice, the first with a confusing nested list comprehension.",
+    "SPV dashboard performs 5 DB round-trips per workspace inside a loop (N+1).",
+    "Positive: ObjectId is consistently excluded, password_hash never leaked (verified on /users, /auth/me, /admin/users), require_spv guards all new SPV endpoints (403 verified for anggota on organization PUT, goal POST, /users, /admin/*), self-delete blocked with 400, and user delete correctly cascades workspaces/okrs/tasks/habits/logs/sessions."
+  ],
+  "updated_files": ["/app/backend/tests/backend_test.py"],
+  "success_rate": {"backend": "97% (36/37)", "frontend": "100% of tested flows (2 low-priority testability gaps)"},
+  "seed_data_creation": "Temporary only, all deleted after testing: anggota users via /auth/register (test_anggota_*), SPV-created user qa_user_*@example.com (created/edited/password-reset/deleted through the UI), BSC goals for year 2099 and a 'QA Peningkatan Net Profit Margin' goal for 2026, one regression OKR and one regression task. The global organization doc is snapshot+restored by a pytest fixture; final state verified to match the owner's real data (Ruang Sanad Indonesia).",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "SPV: teguhvidy2@gmail.com / SpvAdmin2026! (works, role=spv). Anggota accounts are created ad-hoc by the tests.",
+  "context_for_next_testing_agent": "Run `pytest /app/backend/tests/backend_test.py -q -p no:randomly` (37 cases, session-scoped SPV login + fresh anggota register fixtures). IMPORTANT: this is a single-tenant app with ONE global organization doc that a real user is actively editing - the restore_org fixture snapshots/restores it, keep that. Always clean up created users (prefix test_/qa_) via DELETE /api/admin/users/{id}; two pre-existing users (anggota_test_24366@, anggota_ui_1787544007@) belong to earlier iterations - do not delete. Known open failure: test_partial_update_does_not_wipe_lists (PUT /organization partial payload wipes mission/values). Amaliyah habit cell state is exposed via data-completed attribute on [data-testid='habit-cell-{habitId}-{day}'], not via class.",
+  "rca_of_the_issue": "PUT /api/organization: OrgIn declares `mission: List[str] = []` and `values: List[str] = []`. update_org filters with `if v is not None`, so an omitted field arrives as an empty list, passes the filter and is written by $set, clearing previously saved data. Repro: PUT {name,vision,mission:[m1],values:[v1]} then PUT {\"name\":\"X\"} -> GET returns mission=[] values=[]. Mitigation: Optional[List[str]] = None + exclude_unset. Not user-visible today because StrategyPage always submits the complete form, but any future partial caller (or a direct API consumer) loses data."
+}

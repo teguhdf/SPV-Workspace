@@ -759,6 +759,223 @@ async def on_startup():
     await seed_admin()
 
 
+class OrgIn(BaseModel):
+    name: Optional[str] = None
+    vision: Optional[str] = None
+    mission: Optional[List[str]] = None
+    values: Optional[List[str]] = None
+
+
+PERSPECTIVE_ORDER = ["financial", "customer", "process", "learning"]
+
+
+async def _get_org() -> dict:
+    doc = await db.organization.find_one({"id": "main"}, {"_id": 0})
+    if not doc:
+        doc = {"id": "main", "name": "PT Solusi Bisnis Utama", "vision": "", "mission": [], "values": [], "created_at": now_iso()}
+        await db.organization.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api.get("/organization")
+async def get_org(user: dict = Depends(get_current_user)):
+    return await _get_org()
+
+
+@api.put("/organization")
+async def update_org(payload: OrgIn, user: dict = Depends(require_spv)):
+    await _get_org()
+    upd = {k: v for k, v in payload.model_dump().items() if v is not None}
+    if upd:
+        await db.organization.update_one({"id": "main"}, {"$set": upd})
+    return await _get_org()
+
+
+class KPIItem(BaseModel):
+    id: str = Field(default_factory=new_id)
+    name: str
+    baseline: float = 0
+    target: float = 0
+    realisasi: float = 0
+    unit: str = ""
+    linked_kr_id: Optional[str] = None
+    linked_okr_id: Optional[str] = None
+
+
+class GoalIn(BaseModel):
+    perspective: str  # financial|customer|process|learning
+    title: str
+    year: int = 2026
+    order: int = 0
+    kpis: List[KPIItem] = []
+
+
+@api.get("/strategy/goals")
+async def list_goals(year: int = 2026, user: dict = Depends(get_current_user)):
+    items = await db.goals.find({"year": year}, {"_id": 0}).sort([("perspective", 1), ("order", 1)]).to_list(500)
+    return items
+
+
+@api.post("/strategy/goals")
+async def create_goal(payload: GoalIn, user: dict = Depends(require_spv)):
+    if payload.perspective not in PERSPECTIVE_ORDER:
+        raise HTTPException(400, "Perspective tidak valid")
+    doc = {"id": new_id(), **payload.model_dump(), "created_at": now_iso()}
+    doc["kpis"] = [k.model_dump() if hasattr(k, "model_dump") else dict(k) for k in payload.kpis]
+    await db.goals.insert_one(doc)
+    return _clean(doc)
+
+
+@api.patch("/strategy/goals/{gid}")
+async def update_goal(gid: str, payload: GoalIn, user: dict = Depends(require_spv)):
+    g = await db.goals.find_one({"id": gid})
+    if not g:
+        raise HTTPException(404, "Goal tidak ditemukan")
+    upd = payload.model_dump()
+    upd["kpis"] = [k.model_dump() for k in payload.kpis]
+    await db.goals.update_one({"id": gid}, {"$set": upd})
+    return await db.goals.find_one({"id": gid}, {"_id": 0})
+
+
+@api.delete("/strategy/goals/{gid}")
+async def delete_goal(gid: str, user: dict = Depends(require_spv)):
+    await db.goals.delete_one({"id": gid})
+    return {"ok": True}
+
+
+def _kpi_progress(kpi: dict) -> float:
+    try:
+        t = float(kpi.get("target", 0)); b = float(kpi.get("baseline", 0)); r = float(kpi.get("realisasi", 0))
+        if t == b:
+            return 100.0 if r >= t else 0.0
+        return max(0.0, min(100.0, ((r - b) / (t - b)) * 100))
+    except Exception:
+        return 0.0
+
+
+def _kpi_health(progress: float) -> str:
+    if progress >= 75: return "green"
+    if progress >= 40: return "yellow"
+    return "red"
+
+
+@api.get("/strategy/cascade")
+async def strategy_cascade(year: int = 2026, user: dict = Depends(get_current_user)):
+    org = await _get_org()
+    goals = await db.goals.find({"year": year}, {"_id": 0}).sort([("perspective", 1), ("order", 1)]).to_list(500)
+    okrs = await db.okrs.find({}, {"_id": 0}).to_list(500)
+    inits = await db.initiatives.find({}, {"_id": 0}).to_list(1000)
+    okr_by_kr = {}
+    for o in okrs:
+        for kr in o.get("key_results", []):
+            okr_by_kr[kr["id"]] = {"okr_id": o["id"], "objective": o["objective"], "kr": kr, "workspace_id": o["workspace_id"]}
+    # attach linked info to each kpi + health
+    for g in goals:
+        for k in g.get("kpis", []):
+            k["progress"] = round(_kpi_progress(k), 1)
+            k["health"] = _kpi_health(k["progress"])
+            if k.get("linked_kr_id") and okr_by_kr.get(k["linked_kr_id"]):
+                k["linked_okr"] = okr_by_kr[k["linked_kr_id"]]
+    return {"organization": org, "goals": goals, "okrs": okrs, "initiatives": inits}
+
+
+# ================= User Management (SPV) =================
+class AdminUserIn(BaseModel):
+    email: EmailStr
+    password: Optional[str] = None
+    name: str
+    role: str = "anggota"
+    division: Optional[str] = None
+    active: bool = True
+
+
+class AdminUserUpdate(BaseModel):
+    name: Optional[str] = None
+    role: Optional[str] = None
+    division: Optional[str] = None
+    active: Optional[bool] = None
+
+
+class PasswordResetIn(BaseModel):
+    new_password: str
+
+
+@api.post("/admin/users")
+async def admin_create_user(payload: AdminUserIn, user: dict = Depends(require_spv)):
+    if payload.role not in ("spv", "anggota"):
+        raise HTTPException(400, "Role tidak valid")
+    email = payload.email.lower()
+    if await db.users.find_one({"email": email}):
+        raise HTTPException(400, "Email sudah terdaftar")
+    if not payload.password or len(payload.password) < 6:
+        raise HTTPException(400, "Password minimal 6 karakter")
+    uid = new_id()
+    doc = {
+        "id": uid, "email": email, "name": payload.name,
+        "password_hash": hash_password(payload.password),
+        "role": payload.role, "division": payload.division,
+        "active": payload.active, "auth_provider": "local",
+        "created_at": now_iso(),
+    }
+    await db.users.insert_one(doc)
+    await db.workspaces.insert_one({
+        "id": new_id(), "name": f"Workspace {payload.name}",
+        "owner_id": uid, "division": payload.division,
+        "cycle": "Q1 2026", "created_at": now_iso(),
+    })
+    doc.pop("password_hash", None)
+    return _clean(doc)
+
+
+@api.patch("/admin/users/{uid}")
+async def admin_update_user(uid: str, payload: AdminUserUpdate, user: dict = Depends(require_spv)):
+    target = await db.users.find_one({"id": uid})
+    if not target:
+        raise HTTPException(404, "User tidak ditemukan")
+    upd = {k: v for k, v in payload.model_dump().items() if v is not None}
+    if "role" in upd and upd["role"] not in ("spv", "anggota"):
+        raise HTTPException(400, "Role tidak valid")
+    if upd:
+        await db.users.update_one({"id": uid}, {"$set": upd})
+    doc = await db.users.find_one({"id": uid}, {"_id": 0, "password_hash": 0})
+    return doc
+
+
+@api.post("/admin/users/{uid}/reset-password")
+async def admin_reset_password(uid: str, payload: PasswordResetIn, user: dict = Depends(require_spv)):
+    if len(payload.new_password) < 6:
+        raise HTTPException(400, "Password minimal 6 karakter")
+    target = await db.users.find_one({"id": uid})
+    if not target:
+        raise HTTPException(404, "User tidak ditemukan")
+    await db.users.update_one({"id": uid}, {"$set": {"password_hash": hash_password(payload.new_password)}})
+    return {"ok": True}
+
+
+@api.delete("/admin/users/{uid}")
+async def admin_delete_user(uid: str, user: dict = Depends(require_spv)):
+    if uid == user["id"]:
+        raise HTTPException(400, "Tidak dapat menghapus akun sendiri")
+    target = await db.users.find_one({"id": uid})
+    if not target:
+        raise HTTPException(404, "User tidak ditemukan")
+    # cascade delete: workspaces owned + their nested data + user sessions
+    ws_list = await db.workspaces.find({"owner_id": uid}, {"_id": 0}).to_list(100)
+    ws_ids = [w["id"] for w in ws_list]
+    if ws_ids:
+        await db.okrs.delete_many({"workspace_id": {"$in": ws_ids}})
+        await db.initiatives.delete_many({"workspace_id": {"$in": ws_ids}})
+        await db.tasks.delete_many({"workspace_id": {"$in": ws_ids}})
+        await db.task_logs.delete_many({"workspace_id": {"$in": ws_ids}})
+        await db.habits.delete_many({"workspace_id": {"$in": ws_ids}})
+        await db.habit_logs.delete_many({"workspace_id": {"$in": ws_ids}})
+        await db.workspaces.delete_many({"owner_id": uid})
+    await db.user_sessions.delete_many({"user_id": uid})
+    await db.users.delete_one({"id": uid})
+    return {"ok": True, "workspaces_deleted": len(ws_ids)}
+
+
 app.include_router(api)
 
 app.add_middleware(
