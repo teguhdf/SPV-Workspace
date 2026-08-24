@@ -1,0 +1,132 @@
+{
+  "theme": "light",
+  "archetype": "Organic & Earthy / Soft Utility",
+  "typography": {
+    "headings": {
+      "fontFamily": "'Outfit', sans-serif",
+      "weights": ["500", "600", "700"],
+      "usage": "Use Outfit for all dashboard titles, metric numbers, and section headers. Enforce tight tracking (tracking-tight)."
+    },
+    "body": {
+      "fontFamily": "'Inter', sans-serif",
+      "weights": ["400", "500"],
+      "usage": "Use Inter for all lists, tables, data points, and task descriptions. Ensure readability with leading-relaxed."
+    },
+    "hierarchy": {
+      "h1": "text-3xl sm:text-4xl font-bold tracking-tight text-slate-900",
+      "h2": "text-2xl sm:text-3xl font-semibold tracking-tight text-slate-800",
+      "h3": "text-lg sm:text-xl font-medium tracking-tight text-emerald-800",
+      "body": "text-sm text-slate-600",
+      "overline": "text-xs font-bold uppercase tracking-[0.2em] text-emerald-600/70"
+    }
+  },
+  "colors": {
+    "primary": {
+      "DEFAULT": "#059669",
+      "description": "Emerald Green (Nabawi Mosque Dome Green) - Use for active states, main CTAs, and positive progress.",
+      "hover": "#047857",
+      "light": "#D1FAE5"
+    },
+    "secondary": {
+      "DEFAULT": "#D97706",
+      "description": "Warm Gold - Use for Amaliyah (Spiritual) tracking streaks, special badges, or warning states."
+    },
+    "background": {
+      "app": "#F8FAFC",
+      "card": "#FFFFFF",
+      "sidebar": "#064E3B",
+      "description": "App background is a very soft slate/sand to give a calm, grounded feel. Sidebar is a deep forest green for strong contrast."
+    },
+    "text": {
+      "primary": "#0F172A",
+      "secondary": "#475569",
+      "muted": "#94A3B8",
+      "inverse": "#FFFFFF"
+    },
+    "borders": {
+      "DEFAULT": "#E2E8F0",
+      "focus": "#34D399"
+    }
+  },
+  "layouts": {
+    "dashboard_grid": {
+      "description": "High Density Grid for the SPV Overview and User Workspace. Every pixel must be utilized with tight gaps.",
+      "container": "grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-6",
+      "spans": {
+        "summary_widget": "col-span-1",
+        "primary_chart": "col-span-2 lg:col-span-3 row-span-2",
+        "feed_list": "col-span-1 row-span-2"
+      }
+    },
+    "spacing": {
+      "generous": "Use p-6 or p-8 inside cards to let data breathe. Avoid cramped tables.",
+      "optical_alignment": "Align text left, especially in tables and trackers. Center only empty states."
+    }
+  },
+  "surfaces": {
+    "cards": "Flat solid surfaces with crisp 1px borders (border-slate-200). Subtle rounded-xl radius. No heavy drop shadows; use shadow-sm.",
+    "sidebar": "Solid dark green (bg-emerald-900) with a subtle texture or geometric pattern overlay for the Islamic feel.",
+    "headers": "Solid background (bg-white/90 backdrop-blur-md) with a hard bottom border (border-b border-slate-200)."
+  },
+  "visual_enhancers": {
+    "habit_grid": "For the 'Amaliyah Spiritual' tracker, use a contribution graph style (like GitHub) but using varying shades of emerald green (bg-emerald-100 to bg-emerald-600) to represent task completion.",
+    "progress_bars": "Use Shadcn Progress component. Override color to use primary Emerald Green. For OKRs, layer the text inside or right next to the bar.",
+    "empty_states": "Use peaceful nature imagery (like calm lakes or soft deserts) with low opacity, accompanied by soft encouraging text (e.g., 'Semua tugas telah selesai. Alhamdulillah.')."
+  },
+  "motion": {
+    "interactions": "Hover states on all interactive elements (buttons, table rows) using transition-colors duration-200. Progress bars should animate their width on mount.",
+    "lists": "Staggered fade-in for task lists and table rows."
+  },
+  "components": {
+    "buttons": "Pill-shaped (rounded-full) for primary actions, sharp standard (rounded-md) for utility buttons inside forms.",
+    "inputs": "Shadcn input components with focus:ring-emerald-500.",
+    "tables": "Shadcn Table. Use hover:bg-slate-50 for rows. Left align all content except action menus.",
+    "tabs": "Shadcn Tabs. Underline style preferred over pill style for dashboard navigation (Todo vs Amaliyah vs OKR)."
+  },
+  "image_urls": {
+    "avatars": [
+      {
+        "url": "https://images.unsplash.com/photo-1560250097-0b93528c311a?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2ODh8MHwxfHNlYXJjaHwzfHxwcm9mZXNzaW9uYWwlMjBwb3J0cmFpdHxlbnwwfHx8fDE3ODc1MjI5MjJ8MA&ixlib=rb-4.1.0&q=85",
+        "description": "Professional portrait 1 - SPV Avatar",
+        "category": "user_profiles"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1580489944761-15a19d654956?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2ODh8MHwxfHNlYXJjaHwyfHxwcm9mZXNzaW9uYWwlMjBwb3J0cmFpdHxlbnwwfHx8fDE3ODc1MjI5MjJ8MA&ixlib=rb-4.1.0&q=85",
+        "description": "Professional portrait 2 - Team Member Avatar",
+        "category": "user_profiles"
+      }
+    ],
+    "patterns": [
+      {
+        "url": "https://images.unsplash.com/photo-1732831627964-f6fc7157aebd?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2MjJ8MHwxfHNlYXJjaHwxfHxpc2xhbWljJTIwZ2VvbWV0cmljJTIwcGF0dGVybiUyMGdyZWVufGVufDB8fHx8MTc4NzU0MzM2NXww&ixlib=rb-4.1.0&q=85",
+        "description": "Islamic geometric pattern green - Use as a subtle background overlay with 5-10% opacity in the sidebar or header banner.",
+        "category": "backgrounds"
+      }
+    ],
+    "empty_states": [
+      {
+        "url": "https://images.unsplash.com/photo-1609511400549-b49b69d5a0ca?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxODl8MHwxfHNlYXJjaHwxfHxwZWFjZWZ1bCUyMG5hdHVyZSUyMGNhbG18ZW58MHx8fHwxNzg3NTQzMzY1fDA&ixlib=rb-4.1.0&q=85",
+        "description": "Peaceful lake - Use for empty state illustrations (e.g., No pending tasks)",
+        "category": "illustrations"
+      }
+    ]
+  },
+  "instructions_to_main_agent": {
+    "1": "Use the emerald green color palette to reflect the 'hijau kubah mesjid nabawi' theme while maintaining a clean, modern SaaS aesthetic.",
+    "2": "For the Amaliyah Spiritual tracker, build a grid layout similar to a GitHub contribution chart. Provide visual feedback based on completion.",
+    "3": "Implement role-based views. Ensure the SPV Dashboard shows an aggregated view (Execution scores, OKRs) of all team members.",
+    "4": "In the Workspace view, divide the interface into clear tabs: OKR & Initiatives, Execution Scoreboard (Tasks), and Amaliyah Tracker.",
+    "5": "Do not use completely transparent backgrounds for any dropdowns or overlays. Always use solid or heavily blurred backgrounds.",
+    "6": "Add data-testid attributes to all interactive elements for testing."
+  },
+  "UNIVERSAL_GUIDELINES_FOR_MAIN_AGENT": {
+    "1": "You tend to converge toward generic, 'on distribution' outputs. Avoid this: make creative, distinctive frontends that surprise and delight.",
+    "2": "Create depth through layered design elements with z-index hierarchy.",
+    "3": "You MUST NOT apply universal transition. Eg: transition: all. Always add transitions for specific interactive elements like button, input excluding transforms.",
+    "4": "You MUST NOT center align the app container, ie do not add .App { text-align: center; } in the css file.",
+    "5": "NEVER: use AI assistant Emoji characters like robot or brain for icons.",
+    "6": "Use 2-3x more spacing than feels comfortable. Cramped designs look cheap.",
+    "7": "Use 'lucide-react' for all icons.",
+    "8": "Use 'sonner' for toasts."
+  }
+}

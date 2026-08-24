@@ -1,0 +1,93 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@400;500;600;700;800&family=Amiri:wght@400;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: 210 40% 98%;
+  --foreground: 222 47% 11%;
+  --card: 0 0% 100%;
+  --card-foreground: 222 47% 11%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 222 47% 11%;
+  --primary: 160 84% 30%;             /* emerald-700 */
+  --primary-foreground: 0 0% 100%;
+  --secondary: 210 40% 96%;
+  --secondary-foreground: 222 47% 11%;
+  --muted: 210 40% 96%;
+  --muted-foreground: 215 20% 45%;
+  --accent: 152 76% 92%;              /* emerald-100 */
+  --accent-foreground: 158 64% 20%;
+  --destructive: 0 84% 60%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 214 32% 91%;
+  --input: 214 32% 91%;
+  --ring: 160 84% 39%;
+  --radius: 0.75rem;
+  --chart-1: 160 84% 39%;
+  --chart-2: 25 95% 53%;
+  --chart-3: 173 58% 39%;
+  --chart-4: 43 89% 55%;
+  --chart-5: 262 83% 58%;
+}
+
+* { border-color: hsl(var(--border)); }
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, h4, h5, h6, .font-display {
+  font-family: 'Outfit', 'Inter', sans-serif;
+  letter-spacing: -0.01em;
+}
+
+.font-arabic { font-family: 'Amiri', serif; }
+
+/* Islamic subtle pattern for sidebar */
+.islamic-pattern {
+  background-image:
+    radial-gradient(circle at 25% 25%, rgba(255,255,255,0.06) 1px, transparent 1px),
+    radial-gradient(circle at 75% 75%, rgba(255,255,255,0.04) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+.mesjid-gradient {
+  background: linear-gradient(135deg, #064e3b 0%, #065f46 50%, #047857 100%);
+}
+
+/* Habit contribution grid cells */
+.habit-cell {
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 4px;
+  background-color: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  cursor: pointer;
+  transition: transform 120ms ease, background-color 200ms ease;
+}
+.habit-cell:hover { transform: scale(1.15); border-color: #10b981; }
+.habit-cell[data-completed="true"] { background-color: #059669; border-color: #047857; }
+.habit-cell[data-today="true"] { outline: 2px solid #f59e0b; outline-offset: 1px; }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 8px; }
+::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+.status-pill { display:inline-flex; align-items:center; gap:6px; padding:2px 10px; border-radius:999px; font-size:11px; font-weight:600; letter-spacing:0.02em; }
+.status-selesai { background: #d1fae5; color: #065f46; }
+.status-proses { background: #fef3c7; color: #92400e; }
+.status-on { background: #dbeafe; color: #1e40af; }
+.status-terkendala { background: #fee2e2; color: #991b1b; }
+.status-belum { background: #f1f5f9; color: #475569; }

@@ -1,0 +1,674 @@
+from dotenv import load_dotenv
+from pathlib import Path
+ROOT_DIR = Path(__file__).parent
+load_dotenv(ROOT_DIR / ".env")
+
+import os
+import uuid
+import logging
+import bcrypt
+import jwt as pyjwt
+from datetime import datetime, timezone, timedelta, date
+from typing import List, Optional, Any, Dict
+
+from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends
+from starlette.middleware.cors import CORSMiddleware
+from motor.motor_asyncio import AsyncIOMotorClient
+from pydantic import BaseModel, Field, EmailStr
+
+
+# ================= Database =================
+mongo_url = os.environ["MONGO_URL"]
+client = AsyncIOMotorClient(mongo_url)
+db = client[os.environ["DB_NAME"]]
+
+# ================= App =================
+app = FastAPI(title="SPV Monitoring API")
+api = APIRouter(prefix="/api")
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("spv-app")
+
+# ================= Auth Helpers =================
+JWT_ALG = "HS256"
+
+def hash_password(pw: str) -> str:
+    return bcrypt.hashpw(pw.encode(), bcrypt.gensalt()).decode()
+
+def verify_password(pw: str, hashed: str) -> bool:
+    try:
+        return bcrypt.checkpw(pw.encode(), hashed.encode())
+    except Exception:
+        return False
+
+def get_jwt_secret() -> str:
+    return os.environ["JWT_SECRET"]
+
+def create_access_token(user_id: str, email: str, role: str) -> str:
+    payload = {
+        "sub": user_id, "email": email, "role": role,
+        "exp": datetime.now(timezone.utc) + timedelta(hours=12),
+        "type": "access",
+    }
+    return pyjwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALG)
+
+def create_refresh_token(user_id: str) -> str:
+    payload = {
+        "sub": user_id,
+        "exp": datetime.now(timezone.utc) + timedelta(days=7),
+        "type": "refresh",
+    }
+    return pyjwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALG)
+
+def set_auth_cookies(response: Response, access: str, refresh: str):
+    response.set_cookie("access_token", access, httponly=True, secure=True, samesite="none", max_age=43200, path="/")
+    response.set_cookie("refresh_token", refresh, httponly=True, secure=True, samesite="none", max_age=604800, path="/")
+
+
+async def get_current_user(request: Request) -> dict:
+    token = request.cookies.get("access_token")
+    if not token:
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            token = auth[7:]
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        payload = pyjwt.decode(token, get_jwt_secret(), algorithms=[JWT_ALG])
+        if payload.get("type") != "access":
+            raise HTTPException(status_code=401, detail="Invalid token type")
+        user = await db.users.find_one({"id": payload["sub"]}, {"password_hash": 0})
+        if not user:
+            raise HTTPException(status_code=401, detail="User not found")
+        user.pop("_id", None)
+        return user
+    except pyjwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except pyjwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+
+async def require_spv(user: dict = Depends(get_current_user)) -> dict:
+    if user.get("role") not in ("spv", "admin"):
+        raise HTTPException(status_code=403, detail="SPV access required")
+    return user
+
+
+# ================= Models =================
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+def new_id() -> str:
+    return str(uuid.uuid4())
+
+
+class RegisterIn(BaseModel):
+    email: EmailStr
+    password: str
+    name: str
+    role: str = "anggota"  # spv | anggota
+    division: Optional[str] = None
+
+class LoginIn(BaseModel):
+    email: EmailStr
+    password: str
+
+class WorkspaceIn(BaseModel):
+    name: str
+    division: Optional[str] = None
+    cycle: Optional[str] = "Q1 2026"
+    owner_id: Optional[str] = None  # only SPV can set
+
+class WorkspaceUpdate(BaseModel):
+    name: Optional[str] = None
+    division: Optional[str] = None
+    cycle: Optional[str] = None
+
+class KeyResult(BaseModel):
+    id: str = Field(default_factory=new_id)
+    metric: str
+    baseline: float = 0
+    target: float = 0
+    realisasi: float = 0
+    unit: str = "%"
+    confidence: str = "medium"  # high|medium|low
+    deadline: Optional[str] = None
+    comments: Optional[str] = None
+
+class OKRIn(BaseModel):
+    objective: str
+    cycle: Optional[str] = "Q1 2026"
+    key_results: List[KeyResult] = []
+    spv_note: Optional[str] = None
+
+class InitiativeIn(BaseModel):
+    name: str
+    output: Optional[str] = None
+    linked_kr: Optional[str] = None
+    status: str = "belum_mulai"  # belum_mulai|proses|selesai|terkendala
+    percentage: float = 0
+    deadline: Optional[str] = None
+    comments: Optional[str] = None
+    spv_note: Optional[str] = None
+
+class TaskIn(BaseModel):
+    name: str
+    kategori: str = "RUTIN"  # RUTIN|TIDAK_RUTIN
+    frekuensi: str = "HARIAN"  # SEKALI|HARIAN|MINGGUAN|BULANAN
+    status: str = "BELUM_MULAI"  # BELUM_MULAI|ON_TRACKER|PROSES|SELESAI|TERKENDALA
+    pemberi_tugas: Optional[str] = None
+    waktu_mulai: Optional[str] = None
+    batas_waktu: Optional[str] = None
+    catatan_tim: Optional[str] = None
+    catatan_spv: Optional[str] = None
+    link_dokumen: Optional[str] = None
+
+class HabitIn(BaseModel):
+    name: str
+    target_metric: Optional[str] = "Istiqomah > 40 hari"
+    target_days: int = 40
+    category: Optional[str] = "harian"
+    spv_note: Optional[str] = None
+
+class HabitLogIn(BaseModel):
+    habit_id: str
+    date: str  # YYYY-MM-DD
+    completed: bool = True
+    note: Optional[str] = None
+
+class TaskLogIn(BaseModel):
+    task_id: str
+    date: str
+    completed: bool = True
+    note: Optional[str] = None
+
+
+# ================= Auth endpoints =================
+@api.post("/auth/register")
+async def register(payload: RegisterIn, response: Response):
+    email = payload.email.lower()
+    if await db.users.find_one({"email": email}):
+        raise HTTPException(status_code=400, detail="Email sudah terdaftar")
+    if payload.role not in ("spv", "anggota"):
+        raise HTTPException(status_code=400, detail="Role tidak valid")
+    user_id = new_id()
+    user_doc = {
+        "id": user_id,
+        "email": email,
+        "password_hash": hash_password(payload.password),
+        "name": payload.name,
+        "role": payload.role,
+        "division": payload.division,
+        "created_at": now_iso(),
+    }
+    await db.users.insert_one(user_doc)
+    # Create default workspace for the user
+    ws_id = new_id()
+    await db.workspaces.insert_one({
+        "id": ws_id, "name": f"Workspace {payload.name}",
+        "owner_id": user_id, "division": payload.division,
+        "cycle": "Q1 2026", "created_at": now_iso(),
+    })
+    access = create_access_token(user_id, email, payload.role)
+    refresh = create_refresh_token(user_id)
+    set_auth_cookies(response, access, refresh)
+    return {"id": user_id, "email": email, "name": payload.name, "role": payload.role, "division": payload.division, "access_token": access}
+
+
+@api.post("/auth/login")
+async def login(payload: LoginIn, response: Response):
+    email = payload.email.lower()
+    user = await db.users.find_one({"email": email})
+    if not user or not verify_password(payload.password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Email atau password salah")
+    access = create_access_token(user["id"], user["email"], user["role"])
+    refresh = create_refresh_token(user["id"])
+    set_auth_cookies(response, access, refresh)
+    return {"id": user["id"], "email": user["email"], "name": user["name"], "role": user["role"], "division": user.get("division"), "access_token": access}
+
+
+@api.post("/auth/logout")
+async def logout(response: Response):
+    response.delete_cookie("access_token", path="/")
+    response.delete_cookie("refresh_token", path="/")
+    return {"ok": True}
+
+
+@api.get("/auth/me")
+async def me(user: dict = Depends(get_current_user)):
+    return user
+
+
+# ================= Users =================
+@api.get("/users")
+async def list_users(user: dict = Depends(require_spv)):
+    users = await db.users.find({}, {"_id": 0, "password_hash": 0}).to_list(500)
+    return users
+
+
+# ================= Workspaces =================
+def _clean(doc: Dict[str, Any]) -> Dict[str, Any]:
+    doc.pop("_id", None)
+    return doc
+
+
+async def _get_accessible_workspace(ws_id: str, user: dict) -> dict:
+    ws = await db.workspaces.find_one({"id": ws_id}, {"_id": 0})
+    if not ws:
+        raise HTTPException(404, "Workspace tidak ditemukan")
+    if user["role"] not in ("spv", "admin") and ws["owner_id"] != user["id"]:
+        raise HTTPException(403, "Akses ditolak")
+    return ws
+
+
+@api.get("/workspaces")
+async def list_workspaces(user: dict = Depends(get_current_user)):
+    q = {} if user["role"] in ("spv", "admin") else {"owner_id": user["id"]}
+    items = await db.workspaces.find(q, {"_id": 0}).to_list(500)
+    # attach owner name
+    owner_ids = list({i["owner_id"] for i in items})
+    owners = {u["id"]: u async for u in db.users.find({"id": {"$in": owner_ids}}, {"_id": 0, "password_hash": 0})}
+    for it in items:
+        o = owners.get(it["owner_id"], {})
+        it["owner_name"] = o.get("name")
+        it["owner_email"] = o.get("email")
+    return items
+
+
+@api.post("/workspaces")
+async def create_workspace(payload: WorkspaceIn, user: dict = Depends(get_current_user)):
+    owner_id = user["id"]
+    if user["role"] in ("spv", "admin") and payload.owner_id:
+        owner_id = payload.owner_id
+    ws = {
+        "id": new_id(), "name": payload.name, "owner_id": owner_id,
+        "division": payload.division, "cycle": payload.cycle or "Q1 2026",
+        "created_at": now_iso(),
+    }
+    await db.workspaces.insert_one(ws)
+    return _clean(ws)
+
+
+@api.get("/workspaces/{ws_id}")
+async def get_workspace(ws_id: str, user: dict = Depends(get_current_user)):
+    ws = await _get_accessible_workspace(ws_id, user)
+    owner = await db.users.find_one({"id": ws["owner_id"]}, {"_id": 0, "password_hash": 0})
+    ws["owner"] = owner
+    return ws
+
+
+@api.patch("/workspaces/{ws_id}")
+async def update_workspace(ws_id: str, payload: WorkspaceUpdate, user: dict = Depends(get_current_user)):
+    await _get_accessible_workspace(ws_id, user)
+    upd = {k: v for k, v in payload.model_dump().items() if v is not None}
+    if upd:
+        await db.workspaces.update_one({"id": ws_id}, {"$set": upd})
+    ws = await db.workspaces.find_one({"id": ws_id}, {"_id": 0})
+    return ws
+
+
+# ================= OKRs =================
+@api.get("/workspaces/{ws_id}/okrs")
+async def list_okrs(ws_id: str, user: dict = Depends(get_current_user)):
+    await _get_accessible_workspace(ws_id, user)
+    items = await db.okrs.find({"workspace_id": ws_id}, {"_id": 0}).to_list(200)
+    return items
+
+
+@api.post("/workspaces/{ws_id}/okrs")
+async def create_okr(ws_id: str, payload: OKRIn, user: dict = Depends(get_current_user)):
+    await _get_accessible_workspace(ws_id, user)
+    doc = {
+        "id": new_id(), "workspace_id": ws_id,
+        "objective": payload.objective, "cycle": payload.cycle or "Q1 2026",
+        "key_results": [kr.model_dump() for kr in payload.key_results],
+        "spv_note": payload.spv_note,
+        "created_at": now_iso(),
+    }
+    await db.okrs.insert_one(doc)
+    return _clean(doc)
+
+
+@api.patch("/okrs/{okr_id}")
+async def update_okr(okr_id: str, payload: OKRIn, user: dict = Depends(get_current_user)):
+    okr = await db.okrs.find_one({"id": okr_id}, {"_id": 0})
+    if not okr:
+        raise HTTPException(404, "OKR tidak ditemukan")
+    await _get_accessible_workspace(okr["workspace_id"], user)
+    upd = {
+        "objective": payload.objective, "cycle": payload.cycle,
+        "key_results": [kr.model_dump() for kr in payload.key_results],
+        "spv_note": payload.spv_note,
+    }
+    await db.okrs.update_one({"id": okr_id}, {"$set": upd})
+    doc = await db.okrs.find_one({"id": okr_id}, {"_id": 0})
+    return doc
+
+
+@api.delete("/okrs/{okr_id}")
+async def delete_okr(okr_id: str, user: dict = Depends(get_current_user)):
+    okr = await db.okrs.find_one({"id": okr_id})
+    if not okr:
+        raise HTTPException(404, "OKR tidak ditemukan")
+    await _get_accessible_workspace(okr["workspace_id"], user)
+    await db.okrs.delete_one({"id": okr_id})
+    return {"ok": True}
+
+
+# ================= Initiatives =================
+@api.get("/workspaces/{ws_id}/initiatives")
+async def list_initiatives(ws_id: str, user: dict = Depends(get_current_user)):
+    await _get_accessible_workspace(ws_id, user)
+    return await db.initiatives.find({"workspace_id": ws_id}, {"_id": 0}).to_list(500)
+
+
+@api.post("/workspaces/{ws_id}/initiatives")
+async def create_initiative(ws_id: str, payload: InitiativeIn, user: dict = Depends(get_current_user)):
+    await _get_accessible_workspace(ws_id, user)
+    doc = {"id": new_id(), "workspace_id": ws_id, **payload.model_dump(), "created_at": now_iso()}
+    await db.initiatives.insert_one(doc)
+    return _clean(doc)
+
+
+@api.patch("/initiatives/{iid}")
+async def update_initiative(iid: str, payload: InitiativeIn, user: dict = Depends(get_current_user)):
+    it = await db.initiatives.find_one({"id": iid})
+    if not it:
+        raise HTTPException(404, "Initiative tidak ditemukan")
+    await _get_accessible_workspace(it["workspace_id"], user)
+    await db.initiatives.update_one({"id": iid}, {"$set": payload.model_dump()})
+    doc = await db.initiatives.find_one({"id": iid}, {"_id": 0})
+    return doc
+
+
+@api.delete("/initiatives/{iid}")
+async def delete_initiative(iid: str, user: dict = Depends(get_current_user)):
+    it = await db.initiatives.find_one({"id": iid})
+    if not it:
+        raise HTTPException(404, "Initiative tidak ditemukan")
+    await _get_accessible_workspace(it["workspace_id"], user)
+    await db.initiatives.delete_one({"id": iid})
+    return {"ok": True}
+
+
+# ================= Tasks (Execution Scoreboard) =================
+@api.get("/workspaces/{ws_id}/tasks")
+async def list_tasks(ws_id: str, user: dict = Depends(get_current_user)):
+    await _get_accessible_workspace(ws_id, user)
+    return await db.tasks.find({"workspace_id": ws_id}, {"_id": 0}).to_list(1000)
+
+
+@api.post("/workspaces/{ws_id}/tasks")
+async def create_task(ws_id: str, payload: TaskIn, user: dict = Depends(get_current_user)):
+    await _get_accessible_workspace(ws_id, user)
+    doc = {"id": new_id(), "workspace_id": ws_id, **payload.model_dump(), "created_at": now_iso()}
+    await db.tasks.insert_one(doc)
+    return _clean(doc)
+
+
+@api.patch("/tasks/{tid}")
+async def update_task(tid: str, payload: TaskIn, user: dict = Depends(get_current_user)):
+    t = await db.tasks.find_one({"id": tid})
+    if not t:
+        raise HTTPException(404, "Task tidak ditemukan")
+    await _get_accessible_workspace(t["workspace_id"], user)
+    await db.tasks.update_one({"id": tid}, {"$set": payload.model_dump()})
+    return await db.tasks.find_one({"id": tid}, {"_id": 0})
+
+
+@api.delete("/tasks/{tid}")
+async def delete_task(tid: str, user: dict = Depends(get_current_user)):
+    t = await db.tasks.find_one({"id": tid})
+    if not t:
+        raise HTTPException(404, "Task tidak ditemukan")
+    await _get_accessible_workspace(t["workspace_id"], user)
+    await db.tasks.delete_one({"id": tid})
+    await db.task_logs.delete_many({"task_id": tid})
+    return {"ok": True}
+
+
+# Task logs (for recurring daily/weekly/monthly tasks)
+@api.get("/workspaces/{ws_id}/task-logs")
+async def list_task_logs(ws_id: str, start: Optional[str] = None, end: Optional[str] = None,
+                         user: dict = Depends(get_current_user)):
+    await _get_accessible_workspace(ws_id, user)
+    q: Dict[str, Any] = {"workspace_id": ws_id}
+    if start and end:
+        q["date"] = {"$gte": start, "$lte": end}
+    return await db.task_logs.find(q, {"_id": 0}).to_list(5000)
+
+
+@api.post("/workspaces/{ws_id}/task-logs")
+async def upsert_task_log(ws_id: str, payload: TaskLogIn, user: dict = Depends(get_current_user)):
+    await _get_accessible_workspace(ws_id, user)
+    doc = {
+        "id": new_id(), "workspace_id": ws_id,
+        "task_id": payload.task_id, "date": payload.date,
+        "completed": payload.completed, "note": payload.note,
+        "updated_at": now_iso(),
+    }
+    await db.task_logs.update_one(
+        {"workspace_id": ws_id, "task_id": payload.task_id, "date": payload.date},
+        {"$set": doc}, upsert=True,
+    )
+    return doc
+
+
+# ================= Habits (Amaliyah Spiritual) =================
+@api.get("/workspaces/{ws_id}/habits")
+async def list_habits(ws_id: str, user: dict = Depends(get_current_user)):
+    await _get_accessible_workspace(ws_id, user)
+    return await db.habits.find({"workspace_id": ws_id}, {"_id": 0}).to_list(200)
+
+
+@api.post("/workspaces/{ws_id}/habits")
+async def create_habit(ws_id: str, payload: HabitIn, user: dict = Depends(get_current_user)):
+    await _get_accessible_workspace(ws_id, user)
+    doc = {"id": new_id(), "workspace_id": ws_id, **payload.model_dump(), "created_at": now_iso()}
+    await db.habits.insert_one(doc)
+    return _clean(doc)
+
+
+@api.patch("/habits/{hid}")
+async def update_habit(hid: str, payload: HabitIn, user: dict = Depends(get_current_user)):
+    h = await db.habits.find_one({"id": hid})
+    if not h:
+        raise HTTPException(404, "Habit tidak ditemukan")
+    await _get_accessible_workspace(h["workspace_id"], user)
+    await db.habits.update_one({"id": hid}, {"$set": payload.model_dump()})
+    return await db.habits.find_one({"id": hid}, {"_id": 0})
+
+
+@api.delete("/habits/{hid}")
+async def delete_habit(hid: str, user: dict = Depends(get_current_user)):
+    h = await db.habits.find_one({"id": hid})
+    if not h:
+        raise HTTPException(404, "Habit tidak ditemukan")
+    await _get_accessible_workspace(h["workspace_id"], user)
+    await db.habits.delete_one({"id": hid})
+    await db.habit_logs.delete_many({"habit_id": hid})
+    return {"ok": True}
+
+
+@api.get("/workspaces/{ws_id}/habit-logs")
+async def list_habit_logs(ws_id: str, start: Optional[str] = None, end: Optional[str] = None,
+                          user: dict = Depends(get_current_user)):
+    await _get_accessible_workspace(ws_id, user)
+    q: Dict[str, Any] = {"workspace_id": ws_id}
+    if start and end:
+        q["date"] = {"$gte": start, "$lte": end}
+    return await db.habit_logs.find(q, {"_id": 0}).to_list(10000)
+
+
+@api.post("/workspaces/{ws_id}/habit-logs")
+async def upsert_habit_log(ws_id: str, payload: HabitLogIn, user: dict = Depends(get_current_user)):
+    await _get_accessible_workspace(ws_id, user)
+    doc = {
+        "id": new_id(), "workspace_id": ws_id,
+        "habit_id": payload.habit_id, "date": payload.date,
+        "completed": payload.completed, "note": payload.note,
+        "updated_at": now_iso(),
+    }
+    await db.habit_logs.update_one(
+        {"workspace_id": ws_id, "habit_id": payload.habit_id, "date": payload.date},
+        {"$set": doc}, upsert=True,
+    )
+    return doc
+
+
+# ================= Dashboard / Analytics =================
+def _kr_progress(kr: dict) -> float:
+    try:
+        target = float(kr.get("target", 0))
+        baseline = float(kr.get("baseline", 0))
+        real = float(kr.get("realisasi", 0))
+        if target == baseline:
+            return 100.0 if real >= target else 0.0
+        p = ((real - baseline) / (target - baseline)) * 100
+        return max(0.0, min(100.0, p))
+    except Exception:
+        return 0.0
+
+
+@api.get("/workspaces/{ws_id}/summary")
+async def workspace_summary(ws_id: str, user: dict = Depends(get_current_user)):
+    await _get_accessible_workspace(ws_id, user)
+    tasks = await db.tasks.find({"workspace_id": ws_id}, {"_id": 0}).to_list(2000)
+    okrs = await db.okrs.find({"workspace_id": ws_id}, {"_id": 0}).to_list(200)
+    inits = await db.initiatives.find({"workspace_id": ws_id}, {"_id": 0}).to_list(500)
+    habits = await db.habits.find({"workspace_id": ws_id}, {"_id": 0}).to_list(200)
+
+    total = len(tasks)
+    selesai = sum(1 for t in tasks if t.get("status") == "SELESAI")
+    proses = sum(1 for t in tasks if t.get("status") in ("PROSES", "ON_TRACKER"))
+    terkendala = sum(1 for t in tasks if t.get("status") == "TERKENDALA")
+    belum = sum(1 for t in tasks if t.get("status") == "BELUM_MULAI")
+
+    today = date.today().isoformat()
+    overdue = 0
+    for t in tasks:
+        bw = t.get("batas_waktu")
+        if bw and t.get("status") != "SELESAI" and bw < today:
+            overdue += 1
+
+    exec_score = round((selesai / total * 100) if total else 0, 1)
+
+    # OKR overall
+    kr_progresses = []
+    for o in okrs:
+        for kr in o.get("key_results", []):
+            kr_progresses.append(_kr_progress(kr))
+    okr_progress = round(sum(kr_progresses) / len(kr_progresses), 1) if kr_progresses else 0
+
+    # Habit compliance last 30 days
+    from_date = (date.today() - timedelta(days=29)).isoformat()
+    logs = await db.habit_logs.find(
+        {"workspace_id": ws_id, "date": {"$gte": from_date}, "completed": True},
+        {"_id": 0}
+    ).to_list(10000)
+    habit_slots = len(habits) * 30
+    habit_compliance = round((len(logs) / habit_slots * 100) if habit_slots else 0, 1)
+
+    return {
+        "tasks": {
+            "total": total, "selesai": selesai, "proses": proses,
+            "terkendala": terkendala, "belum_mulai": belum, "overdue": overdue,
+            "execution_score": exec_score,
+        },
+        "okr": {"total": len(okrs), "avg_progress": okr_progress},
+        "initiatives": {
+            "total": len(inits),
+            "selesai": sum(1 for i in inits if i.get("status") == "selesai"),
+        },
+        "habits": {"total": len(habits), "compliance_30d": habit_compliance},
+    }
+
+
+@api.get("/dashboard/spv")
+async def spv_dashboard(user: dict = Depends(require_spv)):
+    """Aggregated overview across all workspaces (SPV only)."""
+    workspaces = await db.workspaces.find({}, {"_id": 0}).to_list(500)
+    result = []
+    for ws in workspaces:
+        owner = await db.users.find_one({"id": ws["owner_id"]}, {"_id": 0, "password_hash": 0})
+        # Reuse summary logic
+        tasks = await db.tasks.find({"workspace_id": ws["id"]}, {"_id": 0}).to_list(2000)
+        okrs = await db.okrs.find({"workspace_id": ws["id"]}, {"_id": 0}).to_list(200)
+        habits = await db.habits.find({"workspace_id": ws["id"]}, {"_id": 0}).to_list(200)
+        total = len(tasks)
+        selesai = sum(1 for t in tasks if t.get("status") == "SELESAI")
+        today = date.today().isoformat()
+        overdue = sum(1 for t in tasks if t.get("batas_waktu") and t.get("status") != "SELESAI" and t["batas_waktu"] < today)
+        kr_progresses = []
+        for o in okrs:
+            for kr in o.get("key_results", []):
+                kr_progresses.append(_kr_progress(kr))
+        okr_progress = round(sum(kr_progresses) / len(kr_progresses), 1) if kr_progresses else 0
+
+        from_date = (date.today() - timedelta(days=29)).isoformat()
+        logs = await db.habit_logs.count_documents({"workspace_id": ws["id"], "date": {"$gte": from_date}, "completed": True})
+        habit_slots = len(habits) * 30
+        habit_compliance = round((logs / habit_slots * 100) if habit_slots else 0, 1)
+
+        result.append({
+            "workspace": ws,
+            "owner": owner,
+            "execution_score": round((selesai / total * 100) if total else 0, 1),
+            "total_tasks": total, "selesai": selesai, "overdue": overdue,
+            "okr_progress": okr_progress, "okr_count": len(okrs),
+            "habit_compliance": habit_compliance, "habit_count": len(habits),
+        })
+    return {"workspaces": result, "count": len(result)}
+
+
+# ================= Startup =================
+async def seed_admin():
+    email = os.environ.get("ADMIN_EMAIL", "").lower()
+    password = os.environ.get("ADMIN_PASSWORD", "")
+    if not email or not password:
+        return
+    existing = await db.users.find_one({"email": email})
+    if not existing:
+        uid = new_id()
+        await db.users.insert_one({
+            "id": uid, "email": email,
+            "password_hash": hash_password(password),
+            "name": "Kang Teguh", "role": "spv",
+            "division": "Multimedia", "created_at": now_iso(),
+        })
+        # Default SPV workspace
+        await db.workspaces.insert_one({
+            "id": new_id(), "name": "Workspace Kang Teguh",
+            "owner_id": uid, "division": "Multimedia",
+            "cycle": "Q1 2026", "created_at": now_iso(),
+        })
+        logger.info("Seeded admin/SPV user: %s", email)
+    elif not verify_password(password, existing["password_hash"]):
+        await db.users.update_one({"email": email},
+                                  {"$set": {"password_hash": hash_password(password), "role": "spv"}})
+
+
+@app.on_event("startup")
+async def on_startup():
+    await db.users.create_index("email", unique=True)
+    await db.workspaces.create_index("owner_id")
+    await db.tasks.create_index([("workspace_id", 1), ("frekuensi", 1)])
+    await db.habit_logs.create_index([("workspace_id", 1), ("habit_id", 1), ("date", 1)], unique=True)
+    await db.task_logs.create_index([("workspace_id", 1), ("task_id", 1), ("date", 1)], unique=True)
+    await seed_admin()
+
+
+app.include_router(api)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_credentials=True,
+    allow_origins=[o.strip() for o in os.environ.get("CORS_ORIGINS", "").split(",") if o.strip()],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.on_event("shutdown")
+async def on_shutdown():
+    client.close()
