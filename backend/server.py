@@ -8,6 +8,7 @@ import uuid
 import logging
 import bcrypt
 import jwt as pyjwt
+import httpx
 from datetime import datetime, timezone, timedelta, date
 from typing import List, Optional, Any, Dict
 
@@ -15,6 +16,8 @@ from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depend
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, EmailStr
+
+EMERGENT_SESSION_URL = "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data"
 
 
 # ================= Database =================
@@ -66,6 +69,31 @@ def set_auth_cookies(response: Response, access: str, refresh: str):
 
 
 async def get_current_user(request: Request) -> dict:
+    # 1) Try Emergent session_token first (Google OAuth flow)
+    session_token = request.cookies.get("session_token")
+    if not session_token:
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            # Bearer could be either JWT access token or Emergent session_token; try session first
+            candidate = auth[7:]
+            sess = await db.user_sessions.find_one({"session_token": candidate}, {"_id": 0})
+            if sess:
+                session_token = candidate
+    if session_token:
+        sess = await db.user_sessions.find_one({"session_token": session_token}, {"_id": 0})
+        if sess:
+            exp = sess.get("expires_at")
+            if isinstance(exp, str):
+                exp = datetime.fromisoformat(exp)
+            if exp and exp.tzinfo is None:
+                exp = exp.replace(tzinfo=timezone.utc)
+            if exp and exp < datetime.now(timezone.utc):
+                raise HTTPException(status_code=401, detail="Session expired")
+            user = await db.users.find_one({"id": sess["user_id"]}, {"_id": 0, "password_hash": 0})
+            if user:
+                return user
+
+    # 2) Fallback: JWT access token
     token = request.cookies.get("access_token")
     if not token:
         auth = request.headers.get("Authorization", "")
@@ -228,10 +256,81 @@ async def login(payload: LoginIn, response: Response):
 
 
 @api.post("/auth/logout")
-async def logout(response: Response):
+async def logout(request: Request, response: Response):
+    st = request.cookies.get("session_token")
+    if st:
+        await db.user_sessions.delete_one({"session_token": st})
     response.delete_cookie("access_token", path="/")
     response.delete_cookie("refresh_token", path="/")
+    response.delete_cookie("session_token", path="/")
     return {"ok": True}
+
+
+class GoogleSessionIn(BaseModel):
+    session_id: str
+
+
+@api.post("/auth/google/session")
+async def google_session(payload: GoogleSessionIn, response: Response):
+    """Exchange Emergent session_id for a session_token, create/update user, set cookie."""
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client_http:
+            r = await client_http.get(
+                EMERGENT_SESSION_URL,
+                headers={"X-Session-ID": payload.session_id},
+            )
+        if r.status_code != 200:
+            raise HTTPException(status_code=401, detail="Google session tidak valid")
+        data = r.json()
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=502, detail="Gagal menghubungi layanan Google Auth")
+
+    email = (data.get("email") or "").lower()
+    name = data.get("name") or email.split("@")[0]
+    picture = data.get("picture")
+    session_token = data.get("session_token")
+    if not email or not session_token:
+        raise HTTPException(status_code=400, detail="Data sesi tidak lengkap")
+
+    admin_email = (os.environ.get("ADMIN_EMAIL") or "").lower()
+    existing = await db.users.find_one({"email": email}, {"_id": 0})
+    if existing:
+        upd: Dict[str, Any] = {"name": existing.get("name") or name, "picture": picture, "auth_provider": existing.get("auth_provider") or "google"}
+        if email == admin_email and existing.get("role") != "spv":
+            upd["role"] = "spv"
+        await db.users.update_one({"id": existing["id"]}, {"$set": upd})
+        user_id = existing["id"]
+        role = upd.get("role", existing.get("role", "anggota"))
+    else:
+        user_id = new_id()
+        role = "spv" if email == admin_email else "anggota"
+        await db.users.insert_one({
+            "id": user_id, "email": email, "name": name,
+            "picture": picture, "role": role, "division": None,
+            "auth_provider": "google", "created_at": now_iso(),
+        })
+        # Auto-create default workspace
+        await db.workspaces.insert_one({
+            "id": new_id(), "name": f"Workspace {name}",
+            "owner_id": user_id, "division": None,
+            "cycle": "Q1 2026", "created_at": now_iso(),
+        })
+
+    expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+    await db.user_sessions.insert_one({
+        "user_id": user_id, "session_token": session_token,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "expires_at": expires_at.isoformat(),
+    })
+    response.set_cookie(
+        "session_token", session_token,
+        httponly=True, secure=True, samesite="none",
+        max_age=7 * 24 * 3600, path="/",
+    )
+    user = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
+    return user
 
 
 @api.get("/auth/me")
@@ -655,6 +754,8 @@ async def on_startup():
     await db.tasks.create_index([("workspace_id", 1), ("frekuensi", 1)])
     await db.habit_logs.create_index([("workspace_id", 1), ("habit_id", 1), ("date", 1)], unique=True)
     await db.task_logs.create_index([("workspace_id", 1), ("task_id", 1), ("date", 1)], unique=True)
+    await db.user_sessions.create_index("session_token", unique=True)
+    await db.user_sessions.create_index("user_id")
     await seed_admin()
 
 

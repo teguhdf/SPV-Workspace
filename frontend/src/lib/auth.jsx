@@ -10,6 +10,11 @@ export function AuthProvider({ children }) {
   const [myWorkspace, setMyWorkspace] = useState(null);
 
   const refreshMe = useCallback(async () => {
+    // If returning from OAuth callback, skip auto-me check; AuthCallback will handle it
+    if (typeof window !== "undefined" && window.location.hash?.includes("session_id=")) {
+      setLoading(false);
+      return;
+    }
     try {
       const { data } = await api.get("/auth/me");
       setUser(data);

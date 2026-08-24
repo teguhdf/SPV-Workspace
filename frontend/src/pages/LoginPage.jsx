@@ -80,6 +80,29 @@ export default function LoginPage() {
               {busy ? "Memuat..." : "Masuk"}
             </Button>
           </form>
+
+          <div className="flex items-center gap-3 my-5">
+            <div className="flex-1 h-px bg-slate-200" />
+            <span className="text-xs uppercase tracking-widest text-slate-400 font-semibold">atau</span>
+            <div className="flex-1 h-px bg-slate-200" />
+          </div>
+
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => {
+              // REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
+              const redirectUrl = window.location.origin + "/auth/callback";
+              window.location.href = `https://auth.emergentagent.com/?redirect=${encodeURIComponent(redirectUrl)}`;
+            }}
+            data-testid="login-google"
+            className="w-full rounded-full h-11 font-semibold border-slate-300 hover:bg-slate-50"
+          >
+            <svg className="w-4 h-4 mr-2" viewBox="0 0 24 24" aria-hidden="true">
+              <path fill="#EA4335" d="M12 10.2v3.9h5.4c-.24 1.26-1.63 3.7-5.4 3.7-3.25 0-5.9-2.7-5.9-6s2.65-6 5.9-6c1.85 0 3.09.79 3.8 1.47l2.59-2.5C16.83 3.33 14.63 2.4 12 2.4 6.94 2.4 2.8 6.5 2.8 11.9s4.14 9.5 9.2 9.5c5.32 0 8.83-3.74 8.83-9 0-.6-.07-1.06-.15-1.5H12z"/>
+            </svg>
+            Masuk dengan Google
+          </Button>
           <div className="mt-6 text-sm text-slate-500 text-center">
             Belum punya akun?{" "}
             <Link to="/register" className="text-emerald-700 font-semibold hover:underline" data-testid="go-register">
